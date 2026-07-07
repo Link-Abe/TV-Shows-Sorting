@@ -61,6 +61,26 @@ QUALITY_TOKENS: frozenset[str] = frozenset(
     }
 )
 
+# Show name alias map — keys are normalised lowercase, value is the canonical
+# display name.  Add entries here whenever source filenames use inconsistent
+# abbreviations or short names for the same show.
+# Keys are matched against the parsed show_name_raw after lowercasing and
+# stripping punctuation/spaces.
+SHOW_NAME_ALIASES: dict[str, str] = {
+    # House M.D. variants
+    "house md":         "House M.D.",
+    "house, md":        "House M.D.",
+    "house m d":        "House M.D.",
+    "house, m d":       "House M.D.",
+    # Star Trek abbreviations
+    "ds9":                          "Star Trek Deep Space Nine",
+    "star trek ds9":                "Star Trek Deep Space Nine",
+    "voyager":                      "Star Trek Voyager",
+    "star trek voy":                "Star Trek Voyager",
+    # Stargate
+    "stargate sg 1":                "Stargate SG-1",
+}
+
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -72,6 +92,7 @@ class ShowMetadata:
     show_name_raw: str          # space-separated words, pre-title-case
     season: int                 # 1-based season integer, no leading zeros
     episode: Optional[int]      # 1-based episode integer, or None for season packs
+    name_is_canonical: bool = False  # True when show_name_raw came from alias map (skip title_case)
 
 
 @dataclass
@@ -130,7 +151,8 @@ def classify_file(path: Path) -> FileClass:
 # ---------------------------------------------------------------------------
 
 # Regex for SxxEyy (e.g. S02E04, S20E01) — case-insensitive
-_RE_SXXEYY = re.compile(r'S(\d+)E(\d+)', re.IGNORECASE)
+# Also handles multi-episode ranges like S02E05-09 or S02E05-E09 (captures first episode)
+_RE_SXXEYY = re.compile(r'S(\d+)E(\d+)(?:-E?\d+)?', re.IGNORECASE)
 
 # Regex for standalone Sxx NOT immediately followed by Eyy — case-insensitive
 # Uses a negative lookahead to reject SxxEyy matches.
@@ -166,6 +188,11 @@ def parse(name: str) -> Optional[ShowMetadata]:
         if name.lower().endswith(ext):
             stem = name[: len(name) - len(ext)]
             break
+
+    # Step 1a: Strip leading site-name prefixes like "www.SiteName.org - "
+    # These appear in filenames from torrent sites, e.g.:
+    #   "www.UIndex.org    -    Alien Earth S01E05..."
+    stem = re.sub(r'^www\.[^\s].*?\s+-+\s+', '', stem, flags=re.IGNORECASE).strip()
 
     # Step 1b: Fast-path for the clean Pretty_Printer output format
     #   e.g. "Silo - Season 2 - Episode 4" or "Criminal Record - Season 1"
@@ -254,11 +281,32 @@ def parse(name: str) -> Optional[ShowMetadata]:
             continue
         cleaned_parts.append(part_no_brackets)
 
-    # Step 7: Join remaining words with a single space
-    show_name_raw = ' '.join(cleaned_parts)
+    # Step 7: Join remaining words with a single space, then strip any
+    # trailing/leading hyphens or whitespace that can appear when the last
+    # show-name word was itself a hyphen-only token (e.g. from a badly split
+    # name like "Star Trek -").
+    show_name_raw = ' '.join(cleaned_parts).strip(' -')
+
+    # Step 8: Strip trailing punctuation characters (commas, dots) from the
+    # assembled show name — e.g. "House, M.D." parsed with space separator
+    # can produce "House, M.D." with a trailing dot that confuses folder naming.
+    show_name_raw = show_name_raw.strip('., ')
 
     if not show_name_raw:
         return None
+
+    # Step 9: Apply alias map — normalise known variant names to their
+    # canonical form.  The lookup key is the show name lowercased with
+    # punctuation/spaces collapsed.
+    alias_key = re.sub(r'[^a-z0-9 ]', '', show_name_raw.lower()).strip()
+    alias_key = re.sub(r'\s+', ' ', alias_key)
+    if alias_key in SHOW_NAME_ALIASES:
+        return ShowMetadata(
+            show_name_raw=SHOW_NAME_ALIASES[alias_key],
+            season=season,
+            episode=episode,
+            name_is_canonical=True,
+        )
 
     return ShowMetadata(
         show_name_raw=show_name_raw,
@@ -315,26 +363,33 @@ def title_case(s: str) -> str:
     return " ".join(result)
 
 
+def _format_name(meta: ShowMetadata) -> str:
+    """Return the display show name, skipping title_case for canonical alias names."""
+    if meta.name_is_canonical:
+        return meta.show_name_raw
+    return title_case(meta.show_name_raw)
+
+
 def format_show_folder(meta: ShowMetadata) -> str:
     """Returns e.g. 'Ancient Aliens'"""
-    return title_case(meta.show_name_raw)
+    return _format_name(meta)
 
 
 def format_season_folder(meta: ShowMetadata) -> str:
     """Returns e.g. 'Ancient Aliens - Season 20'"""
-    return f"{title_case(meta.show_name_raw)} - Season {meta.season}"
+    return f"{_format_name(meta)} - Season {meta.season}"
 
 
 def format_season_only_folder(meta: ShowMetadata) -> str:
     """Returns e.g. 'Criminal Record - Season 1' (episode is None)"""
-    return f"{title_case(meta.show_name_raw)} - Season {meta.season}"
+    return f"{_format_name(meta)} - Season {meta.season}"
 
 
 def format_episode_filename(meta: ShowMetadata, ext: str) -> str:
     """Returns e.g. 'Ancient Aliens - Season 20 - Episode 1.mkv'
     ext should include the leading dot; it is lowercased in the output."""
     return (
-        f"{title_case(meta.show_name_raw)}"
+        f"{_format_name(meta)}"
         f" - Season {meta.season}"
         f" - Episode {meta.episode}"
         f"{ext.lower()}"
@@ -371,8 +426,13 @@ def organise(root: Path, overwrite: bool = False) -> list[OrgAction]:
     # Discovery pass: walk the entire tree and classify every file.
     # No filesystem modifications are made here.
     # ------------------------------------------------------------------
+    file_count = 0
+    print("Scanning files...", flush=True)
     for dirpath, _dirnames, filenames in os.walk(root):
         for filename in filenames:
+            file_count += 1
+            if file_count % 100 == 0:
+                print(f"  Scanned {file_count} files...", flush=True)
             file_path = Path(dirpath) / filename
             file_class = classify_file(file_path)
 
@@ -440,6 +500,7 @@ def organise(root: Path, overwrite: bool = False) -> list[OrgAction]:
     # We track every directory that contained a file we touched (moved,
     # deleted, or simply visited as a potential container).
     # ------------------------------------------------------------------
+    print(f"Scan complete: {file_count} files found. Planning {len(planned)} operations...", flush=True)
     source_dirs: set[Path] = set()
     for op in planned:
         source_dirs.add(op.source.parent)
@@ -450,6 +511,7 @@ def organise(root: Path, overwrite: bool = False) -> list[OrgAction]:
     # ------------------------------------------------------------------
 
     # --- CREATE_DIR pass ---
+    print("Creating folders...", flush=True)
     created_dirs: set[Path] = set()
     for op in planned:
         if op.kind != "CREATE_DIR":
@@ -473,6 +535,7 @@ def organise(root: Path, overwrite: bool = False) -> list[OrgAction]:
             ))
 
     # --- MOVE pass ---
+    print("Moving files...", flush=True)
     for op in planned:
         if op.kind != "MOVE":
             continue
@@ -490,6 +553,8 @@ def organise(root: Path, overwrite: bool = False) -> list[OrgAction]:
                 ))
                 continue
         try:
+            if dest.exists():
+                os.remove(dest)
             shutil.move(str(src), str(dest))
             actions.append(OrgAction(
                 kind="MOVED",
@@ -504,6 +569,7 @@ def organise(root: Path, overwrite: bool = False) -> list[OrgAction]:
             ))
 
     # --- DELETE pass (junk / sample files scheduled during discovery) ---
+    print("Deleting junk files...", flush=True)
     for op in planned:
         if op.kind != "DELETE":
             continue
@@ -663,7 +729,7 @@ def main() -> None:
             raise SystemExit(1)
 
         # Compute temp copy path: <parent>/<basename>_<timestamp>
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         temp_copy = test_path.parent / f"{test_path.name}_{timestamp}"
 
         # Copy the reference folder
