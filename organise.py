@@ -68,17 +68,29 @@ QUALITY_TOKENS: frozenset[str] = frozenset(
 # stripping punctuation/spaces.
 SHOW_NAME_ALIASES: dict[str, str] = {
     # House M.D. variants
-    "house md":         "House M.D.",
-    "house, md":        "House M.D.",
-    "house m d":        "House M.D.",
-    "house, m d":       "House M.D.",
-    # Star Trek abbreviations
-    "ds9":                          "Star Trek Deep Space Nine",
-    "star trek ds9":                "Star Trek Deep Space Nine",
-    "voyager":                      "Star Trek Voyager",
-    "star trek voy":                "Star Trek Voyager",
+    "house md":                             "House M.D.",
+    "house, md":                            "House M.D.",
+    "house m d":                            "House M.D.",
+    "house, m d":                           "House M.D.",
+    # Star Trek abbreviations and hyphen/typo variants
+    "ds9":                                  "Star Trek Deep Space Nine",
+    "star trek ds9":                        "Star Trek Deep Space Nine",
+    "start trek deep space nine":           "Star Trek Deep Space Nine",  # typo: "Start"
+    "star trek  deep space nine":           "Star Trek Deep Space Nine",  # double space
+    "voyager":                              "Star Trek Voyager",
+    "star trek  voyager":                   "Star Trek Voyager",           # double space
+    "star trek voy":                        "Star Trek Voyager",
     # Stargate
-    "stargate sg 1":                "Stargate SG-1",
+    "stargate sg 1":                        "Stargate SG-1",
+    # Karl Pilkington / Moaning of Life duplicates
+    "karl pilkington the moaning of life":  "The Moaning of Life",
+    # The Servant / Servant duplicate — canonical is without "The"
+    "the servant":                          "Servant",
+    # Strictly Come Dancing typo
+    "stricktly come dancing":               "Strictly Come Dancing",
+    # Add more as needed, e.g.:
+    # "tng":  "Star Trek The Next Generation",
+    # "tos":  "Star Trek The Original Series",
 }
 
 
@@ -155,17 +167,11 @@ def classify_file(path: Path) -> FileClass:
 _RE_SXXEYY = re.compile(r'S(\d+)E(\d+)(?:-E?\d+)?', re.IGNORECASE)
 
 # Regex for standalone Sxx NOT immediately followed by Eyy — case-insensitive
-# Uses a negative lookahead to reject SxxEyy matches.
 _RE_SXX = re.compile(r'S(\d+)(?!E\d)', re.IGNORECASE)
 
-# Regex for the clean Pretty_Printer output format:
-#   "<Show Name> - Season N - Episode M"  (episode variant)
-#   "<Show Name> - Season N"              (season-only variant)
-# Group 1: show name, Group 2: season, Group 3: episode (optional)
-_RE_CLEAN_FORMAT = re.compile(
-    r'^(.+?)\s+-\s+Season\s+(\d+)(?:\s+-\s+Episode\s+(\d+))?$',
-    re.IGNORECASE,
-)
+# Regex for the Plex output format — used for idempotency on already-organised files:
+#   "<Show Name> - SxxEyy"
+_RE_CLEAN_FORMAT = re.compile(r'^(.+?)\s+-\s+S(\d+)E(\d+)$', re.IGNORECASE)
 
 # Regex for bracket-enclosed release-group tokens, e.g. [EZTVx.to], [TGx]
 _RE_BRACKET_TOKEN = re.compile(r'\[[^\]]*\]')
@@ -190,27 +196,18 @@ def parse(name: str) -> Optional[ShowMetadata]:
             break
 
     # Step 1a: Strip leading site-name prefixes like "www.SiteName.org - "
-    # These appear in filenames from torrent sites, e.g.:
-    #   "www.UIndex.org    -    Alien Earth S01E05..."
     stem = re.sub(r'^www\.[^\s].*?\s+-+\s+', '', stem, flags=re.IGNORECASE).strip()
 
-    # Step 1b: Fast-path for the clean Pretty_Printer output format
-    #   e.g. "Silo - Season 2 - Episode 4" or "Criminal Record - Season 1"
+    # Step 1b: Fast-path for already-organised Plex-format filenames (idempotency):
+    #   e.g. "Silo - S02E05" — parse directly without going through the full algorithm
     clean_match = _RE_CLEAN_FORMAT.match(stem)
     if clean_match:
         show_name_raw = clean_match.group(1).strip()
         season = int(clean_match.group(2))
-        episode_str = clean_match.group(3)
-        episode: Optional[int] = int(episode_str) if episode_str else None
+        episode: Optional[int] = int(clean_match.group(3))
         if show_name_raw:
-            return ShowMetadata(
-                show_name_raw=show_name_raw,
-                season=season,
-                episode=episode,
-            )
+            return ShowMetadata(show_name_raw=show_name_raw, season=season, episode=episode)
 
-    # Step 2: Find the leftmost SxxEyy or Sxx token in the raw stem to determine
-    # the pre-season portion (needed for separator detection).
     sxxeyy_match = _RE_SXXEYY.search(stem)
     sxx_match = _RE_SXX.search(stem)
 
@@ -376,22 +373,21 @@ def format_show_folder(meta: ShowMetadata) -> str:
 
 
 def format_season_folder(meta: ShowMetadata) -> str:
-    """Returns e.g. 'Ancient Aliens - Season 20'"""
-    return f"{_format_name(meta)} - Season {meta.season}"
+    """Returns e.g. 'Season 20'  (Plex preferred format)"""
+    return f"Season {meta.season}"
 
 
 def format_season_only_folder(meta: ShowMetadata) -> str:
-    """Returns e.g. 'Criminal Record - Season 1' (episode is None)"""
-    return f"{_format_name(meta)} - Season {meta.season}"
+    """Returns e.g. 'Season 1'  (episode is None, Plex preferred format)"""
+    return f"Season {meta.season}"
 
 
 def format_episode_filename(meta: ShowMetadata, ext: str) -> str:
-    """Returns e.g. 'Ancient Aliens - Season 20 - Episode 1.mkv'
+    """Returns e.g. 'Ancient Aliens - S20E01.mkv'  (Plex preferred format)
     ext should include the leading dot; it is lowercased in the output."""
     return (
         f"{_format_name(meta)}"
-        f" - Season {meta.season}"
-        f" - Episode {meta.episode}"
+        f" - S{meta.season:02d}E{meta.episode:02d}"
         f"{ext.lower()}"
     )
 

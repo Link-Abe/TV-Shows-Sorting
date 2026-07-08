@@ -1,95 +1,150 @@
 # TV-Shows-Sorting
 
-A single-file Python script that reorganises messy TV show downloads into a clean, browsable folder hierarchy.
-
-## Output structure
-
-```
-<TV Shows Root>/
-  <Show Name>/
-    <Show Name - Season X>/
-      <Show Name - Season X - Episode Y>.ext
-```
-
-For example:
-
-```
-Ancient.Aliens.S20E01.1080p.WEB.h264-EDITH[EZTVx.to].mkv
-  →  Ancient Aliens/Ancient Aliens - Season 20/Ancient Aliens - Season 20 - Episode 1.mkv
-```
+Two single-file Python scripts that organise messy TV show and movie downloads into clean, Plex-ready folder structures.
 
 ## Requirements
 
 - Python 3.10+
 - No third-party runtime dependencies (stdlib only)
 
-To run the tests:
+---
+
+## TV Shows — `organise.py`
+
+### Output structure
+
+```
+<TV Shows Root>/
+  <Show Name>/
+    Season X/
+      <Show Name> - SxxEyy.ext
+```
+
+Example:
+
+```
+Ancient.Aliens.S20E01.1080p.WEB.h264-EDITH[EZTVx.to].mkv
+  →  Ancient Aliens/Season 20/Ancient Aliens - S20E01.mkv
+```
+
+### Usage
 
 ```bash
-pip install hypothesis pytest
+# Organise your TV shows folder
+python organise.py "E:\TV Shows"
+
+# Dry run on a timestamped copy (original untouched)
+python organise.py --test "E:\TV Shows"
+
+# Overwrite conflicts
+python organise.py --overwrite "E:\TV Shows"
 ```
 
-## Usage
-
-### Organise a folder
-
-```bash
-python organise.py <path/to/TV Shows Root>
-```
-
-Recursively walks the folder, moves every parseable media file to its correct location, deletes junk files (`.nfo`, `.txt`, `.jpg`, etc.), and removes empty folders.
-
-### Dry run (test mode)
-
-```bash
-python organise.py --test <path/to/TV Shows Root>
-```
-
-Creates a timestamped copy of the folder (e.g. `TV-Shows-Root_20240611T120000Z`) in the same parent directory, runs the organiser on the copy, and leaves the original completely untouched. The copy remains on disk so you can inspect the result.
-
-### Overwrite conflicts
-
-```bash
-python organise.py --overwrite <path/to/TV Shows Root>
-python organise.py --test <path/to/TV Shows Root> --overwrite
-```
-
-If a destination file already exists, `--overwrite` replaces it. Without this flag, conflicts are logged and the source file is left in place.
-
-## Output
-
-Every action is logged to stdout:
-
-```
-TESTMODE: working copy at C:\...\TV-Shows-Root_20240611T120000Z
-CREATED: C:\...\Ancient Aliens\Ancient Aliens - Season 20
-MOVED:   C:\...\Ancient.Aliens.S20E01.mkv → C:\...\Ancient Aliens - Season 20 - Episode 1.mkv
-DELETED: C:\...\show.nfo
-WARN:    unparseable – C:\...\some_unrecognised_file.mkv
-CONFLICT: C:\...\src.mkv → C:\...\dest.mkv (skipped; use --overwrite to replace)
-
---- Summary ---
-Files moved:     12
-Folders created: 6
-Files deleted:   4
-Warnings:        1
-Conflicts:       0
-```
-
-## What it handles
+### What it handles
 
 | Source pattern | Result |
 |---|---|
-| `Ancient.Aliens.S20E01.1080p.WEB.h264-EDITH[EZTVx.to].mkv` | `Ancient Aliens/Ancient Aliens - Season 20/Ancient Aliens - Season 20 - Episode 1.mkv` |
-| `Resident Alien S03E07 Here Comes My Baby 1080p AMZN WEB-DL.mkv` | `Resident Alien/Resident Alien - Season 3/Resident Alien - Season 3 - Episode 7.mkv` |
-| `silo.s02e04.multi.1080p.web.h264.mkv` (lowercase) | `Silo/Silo - Season 2/Silo - Season 2 - Episode 4.mkv` |
-| Season pack folder (`Criminal.Record.S01.COMPLETE.720p...`) | All episodes unpacked into `Criminal Record/Criminal Record - Season 1/` |
+| `Ancient.Aliens.S20E01.1080p.WEB.h264-EDITH[EZTVx.to].mkv` | `Ancient Aliens/Season 20/Ancient Aliens - S20E01.mkv` |
+| `Resident Alien S03E07 Here Comes My Baby 1080p AMZN WEB-DL.mkv` | `Resident Alien/Season 3/Resident Alien - S03E07.mkv` |
+| `silo.s02e04.multi.1080p.web.h264.mkv` (lowercase) | `Silo/Season 2/Silo - S02E04.mkv` |
+| `Silo.S02E05-09.mkv` (multi-episode range) | `Silo/Season 2/Silo - S02E05.mkv` |
+| Season pack folder (`Criminal.Record.S01.COMPLETE...`) | All episodes unpacked into `Criminal Record/Season 1/` |
+| `www.UIndex.org - Alien Earth S01E05...mkv` (site prefix) | `Alien Earth/Season 1/Alien Earth - S01E05.mkv` |
 | Junk files (`.nfo`, `.txt`, `.jpg`, `.srt`, etc.) | Deleted |
 | Sample files (`...sample.mkv`) | Deleted |
+| Already correctly placed files | Skipped (idempotent) |
 | Unknown extension files | Left in place with a `WARN` log entry |
+
+### Show name aliases
+
+The script normalises known variant names automatically. Edit `SHOW_NAME_ALIASES` in `organise.py` to add more:
+
+```python
+SHOW_NAME_ALIASES: dict[str, str] = {
+    "ds9":                 "Star Trek Deep Space Nine",
+    "voyager":             "Star Trek Voyager",
+    "house md":            "House M.D.",
+    "stargate sg 1":       "Stargate SG-1",
+    # add your own here...
+}
+```
+
+---
+
+## Movies — `organise_movies.py`
+
+### Output structure
+
+```
+<Movies Root>/
+  <Movie Title>.ext
+```
+
+Example:
+
+```
+Avatar.The.Way.Of.Water.2022.BLURAY.1080p.BluRay.x264.AAC5.1-LAMA.mkv
+  →  Movies/Avatar the Way of Water.mkv
+```
+
+### Usage
+
+```bash
+# Organise your Movies folder
+python organise_movies.py "E:\Movies"
+
+# Dry run on a timestamped copy (original untouched)
+python organise_movies.py --test "E:\Movies"
+
+# Overwrite conflicts
+python organise_movies.py --overwrite "E:\Movies"
+```
+
+### What it handles
+
+| Source | Result |
+|---|---|
+| `Avatar.The.Way.Of.Water.2022.BLURAY.1080p.x264-LAMA.mkv` | `Avatar the Way of Water.mkv` |
+| `No Time To Die (2021) [1080p] [WEBRip] [YTS.MX].mkv` | `No Time to Die.mkv` |
+| `oppenheimer.2023.1080p.web.h264.mkv` | `Oppenheimer.mkv` |
+| Junk files (`.nfo`, `.txt`, `.jpg`, etc.) | Deleted |
+| Empty folders after organising | Removed |
+| Already correctly named files | Skipped (idempotent) |
+
+---
+
+## Output log format
+
+Both scripts log every action to stdout:
+
+```
+Scanning files...
+  Scanned 100 files...
+Scan complete: 243 files found. Planning 18 moves...
+Moving files...
+MOVED: E:\...\source.mkv → E:\...\Clean Name.mkv
+DELETED: E:\...\junk.nfo
+WARN: unparseable – E:\...\unrecognised_file.mkv
+CONFLICT: E:\...\src.mkv → E:\...\dest.mkv (skipped; use --overwrite to replace)
+
+--- Summary ---
+Files moved:   18
+Files deleted: 7
+Warnings:      2
+Conflicts:     0
+```
+
+## Windows permissions
+
+If you see `[WinError 5] Access is denied` errors, run this in an admin PowerShell to strip read-only flags:
+
+```powershell
+Get-ChildItem -Path "E:\TV Shows" -Recurse | ForEach-Object { $_.Attributes = $_.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly) }
+```
 
 ## Running tests
 
 ```bash
+pip install hypothesis pytest
 python -m pytest tests/ -v
 ```
