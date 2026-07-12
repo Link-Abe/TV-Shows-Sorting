@@ -1,0 +1,22 @@
+# Kiro spec files
+.kiro/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Hypothesis test data
+.hypothesis/
+
+# Pytest cache
+.pytest_cache/
+
+# Test folder copies
+TV-Shows-Sorting-Test*/
+
+# Python virtual environments
+.venv/
+venv/
+env/
